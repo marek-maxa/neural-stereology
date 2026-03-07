@@ -1,0 +1,16 @@
+{
+    "macroscopic_strain": 0.05,
+    "orientation_sample_path": "./orientation",
+    "max_lamellae_per_cell": 5,
+    "min_distance_from_endpoints": 0.05,
+    "min_distance_among_lamellae": 0.1,
+    "min_lamella_width": 0.05,
+    "max_lamella_width": 0.5,
+    "growth_rates": [
+        1.0,
+        1.2,
+        1.2,
+        1.0,
+        1.0
+    ]
+}

@@ -17,5 +17,8 @@
     "inner_cells_path": "./inner_cells",
     "strain": "StrainSymGLTwin",
     "use_simul_annealing": false,
-    "use_mock_twinning": false
+    "use_mock_twinning": false,
+    "mock_active_fraction": 0.5,
+    "mock_volume_fraction_base": 0.14,
+    "mock_volume_fraction_jitter": 0.03
 }

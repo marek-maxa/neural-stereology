@@ -80,7 +80,9 @@ def import_orientation(orientation_sample_path):
 
 
 def compute_twinning_parameters(macroscopic_strain, orientation_sample, strain, data_directory='./data',
-                                use_mock_twinning=False, logger=None):
+                                use_mock_twinning=False, mock_active_fraction=0.25,
+                                mock_volume_fraction_base=0.05, mock_volume_fraction_jitter=0.01,
+                                logger=None):
     """
     Computes twinning parameters (normals, volume fractions, Schmid factors) based on
     macroscopic strain and orientation data. Saves the results to text files.
@@ -99,7 +101,15 @@ def compute_twinning_parameters(macroscopic_strain, orientation_sample, strain, 
 
     # Generate twinning parameters using provided data
     if use_mock_twinning:
-        df = tools.generate_mock_twin_parameters(macroscopic_strain, orientation_sample, strain, logger)
+        df = tools.generate_mock_twin_parameters(
+            macroscopic_strain,
+            orientation_sample,
+            strain,
+            mock_active_fraction=mock_active_fraction,
+            mock_volume_fraction_base=mock_volume_fraction_base,
+            mock_volume_fraction_jitter=mock_volume_fraction_jitter,
+            logger=logger,
+        )
     else:
         df = tools.generate_twin_parameters(macroscopic_strain, orientation_sample, strain, logger)
 
@@ -306,7 +316,9 @@ def perform_twinning(cells, max_lamellae_per_cell, use_simul_annealing, logger=N
 def deform_tessellation(macroscopic_strain, orientation_sample_path, max_lamellae_per_cell, min_distance_from_endpoints,
                         min_distance_among_lamellae, min_lamella_width, max_lamella_width, growth_rates,
                         tessellation_path, inner_cells_path, strain, use_simul_annealing,
-                        use_mock_twinning=False, logger=None):
+                        use_mock_twinning=False, mock_active_fraction=0.25,
+                        mock_volume_fraction_base=0.05, mock_volume_fraction_jitter=0.01,
+                        logger=None):
     """
     Main function to deform the tessellation by growing lamellae based on given parameters.
 
@@ -336,6 +348,9 @@ def deform_tessellation(macroscopic_strain, orientation_sample_path, max_lamella
                                                                                                orientations, strain,
                                                                                                "./data",
                                                                                                use_mock_twinning,
+                                                                                               mock_active_fraction,
+                                                                                               mock_volume_fraction_base,
+                                                                                               mock_volume_fraction_jitter,
                                                                                                logger)
     #print(f'volfrac:{np.where(np.array(volume_fractions)<0.)}')
     #print(f'volfrac:{volume_fractions}')

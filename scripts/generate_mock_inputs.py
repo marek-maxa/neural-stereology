@@ -68,13 +68,19 @@ def main():
     parser.add_argument("--output-dir", default="src/lamella", help="Directory to write the input files into.")
     parser.add_argument("--cells", type=int, default=24, help="Number of synthetic grains.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+    parser.add_argument(
+        "--min-distance",
+        type=float,
+        default=0.12,
+        help="Minimum distance between seed points in the unit cube.",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     rng = random.Random(args.seed)
-    points = sample_points(args.cells, min_distance=0.12, rng=rng)
+    points = sample_points(args.cells, min_distance=args.min_distance, rng=rng)
 
     write_tessellation(output_dir / "tessellation", points, rng)
     write_inner_cells(output_dir / "inner_cells", len(points))

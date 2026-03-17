@@ -110,7 +110,15 @@ def generate_twin_parameters(epsilon, orientation_sample, strain, logger=None):
     return pd.DataFrame(data)
 
 
-def generate_mock_twin_parameters(epsilon, orientation_sample, strain, logger=None):
+def generate_mock_twin_parameters(
+    epsilon,
+    orientation_sample,
+    strain,
+    mock_active_fraction=0.25,
+    mock_volume_fraction_base=0.05,
+    mock_volume_fraction_jitter=0.01,
+    logger=None,
+):
     """
     Generate synthetic twinning parameters for smoke testing the geometry pipeline
     without crystallographic CIF inputs.
@@ -123,6 +131,9 @@ def generate_mock_twin_parameters(epsilon, orientation_sample, strain, logger=No
         "pipeline, not for scientific interpretation."
     )
 
+    active_count = max(1, round(len(orientation_sample) * mock_active_fraction))
+    active_ids = set(np.linspace(0, len(orientation_sample) - 1, active_count, dtype=int).tolist())
+
     rows = []
     for gi, eu in enumerate(orientation_sample):
         normal = rng.normal(size=3)
@@ -134,8 +145,14 @@ def generate_mock_twin_parameters(epsilon, orientation_sample, strain, logger=No
             float((eu[2] + rng.uniform(-0.15, 0.15)) % (2 * np.pi)),
         ]
 
-        volume_fraction = float(np.clip(0.05 + 0.01 * np.sin(gi), 0.03, 0.08))
-        propensity = 0.55 if gi % 4 == 0 else 0.05
+        volume_fraction = float(
+            np.clip(
+                mock_volume_fraction_base + mock_volume_fraction_jitter * np.sin(gi),
+                0.02,
+                0.35,
+            )
+        )
+        propensity = 0.8 if gi in active_ids else 0.05
 
         twinning_strain = np.array([
             [epsilon, 0.0, 0.0],

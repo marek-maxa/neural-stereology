@@ -515,46 +515,6 @@ def save_simulation_results(cells, file_path, logger=None):
     return None
 
 
-def copy_data_to_result(logger=None):
-    """
-    Copies specific important files from the './data' directory to the './result' directory.
-    """
-    logger = logger or logging.getLogger("Twinning")
-
-    # Define the source and destination directories
-    data_directory = Path(os.getcwd()) / 'data'
-    result_directory = Path(os.getcwd()) / 'result'
-
-    # Remove the existing result directory if it exists
-    if result_directory.exists():
-        shutil.rmtree(result_directory)
-
-    # Create the result directory
-    result_directory.mkdir(parents=True, exist_ok=True)
-
-    # List of files to be copied
-    files_to_copy = ["small.tess", "2scale.tess"]
-
-    for file_name in files_to_copy:
-        source_path = data_directory / file_name
-        destination_path = result_directory / file_name
-
-        try:
-            # Copy the file if it exists
-            if source_path.exists():
-                shutil.copy2(source_path, destination_path)
-                if logger:
-                    logger.info(f"Copied {file_name} to result directory.")
-            else:
-                if logger:
-                    logger.warning(f"'{file_name}' not found in the data directory.")
-        except Exception as e:
-            if logger:
-                logger.error(f"Error copying {file_name}: {e}")
-
-    return None
-
-
 def check_precision(cells, segments, logger=None):
     result_dir = Path(os.getcwd()) / 'data'
 

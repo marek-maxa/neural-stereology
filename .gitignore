@@ -33,6 +33,7 @@ src/lamella/data/
 src/lamella/tessellation
 src/lamella/inner_cells
 src/lamella/orientation
+src/lamella/visualization/
 
 # Generated mesh / solver artifacts
 *.geo
@@ -40,4 +41,5 @@ src/lamella/orientation
 *.msh4
 *.stcell
 *.pckl
-src/lamella/result/*.pov
+img*.pov
+img*.png

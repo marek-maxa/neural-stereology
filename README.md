@@ -50,6 +50,26 @@ Then run the generator:
 uv run --directory src/lamella python main.py --config ./model/config.json
 ```
 
+## Visualization
+
+The generated tessellation can be visualized from:
+
+- `src/lamella/data/2scale.tess`
+
+Example:
+
+```bash
+neper -V src/lamella/data/2scale.tess -print img
+```
+
+For image rendering, `povray` may be required as a system dependency.
+
+A helper script is also available:
+
+```bash
+python scripts/visualize_tess.py --tess src/lamella/data/2scale.tess --output-stem src/lamella/visualization/2scale
+```
+
 ## Notes
 
 - the repository is at an early stage

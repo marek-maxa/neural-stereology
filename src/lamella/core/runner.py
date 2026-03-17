@@ -364,9 +364,6 @@ def deform_tessellation(macroscopic_strain, orientation_sample_path, max_lamella
     # Step 6: Prepare the cells for the Neper tool
     segments, small_cells = tools.prepare_for_neper(cells, logger)
 
-    # Step 7: Copy results to the result directory
-    tools.copy_data_to_result()
-
     return small_cells, segments
 
 

@@ -16,5 +16,6 @@
     "tessellation_path": "./tessellation",
     "inner_cells_path": "./inner_cells",
     "strain": "StrainSymGLTwin",
-    "use_simul_annealing": false
+    "use_simul_annealing": false,
+    "use_mock_twinning": false
 }

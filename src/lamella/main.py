@@ -52,13 +52,16 @@ def validate_required_inputs(config):
     """
     Validate that the required runtime inputs are present before the simulation starts.
     """
+    use_mock_twinning = config.get("use_mock_twinning", False)
     required_paths = {
         "tessellation_path": config.get("tessellation_path"),
         "inner_cells_path": config.get("inner_cells_path"),
         "orientation_sample_path": config.get("orientation_sample_path"),
-        "model/NiTi_pm3m.cif": "./model/NiTi_pm3m.cif",
-        "model/NiTiB19p.cif": "./model/NiTiB19p.cif",
     }
+
+    if not use_mock_twinning:
+        required_paths["model/NiTi_pm3m.cif"] = "./model/NiTi_pm3m.cif"
+        required_paths["model/NiTiB19p.cif"] = "./model/NiTiB19p.cif"
 
     missing = []
     for label, raw_path in required_paths.items():
@@ -71,9 +74,15 @@ def validate_required_inputs(config):
 
     if missing:
         missing_list = "\n".join(f"- {path}" for path in missing)
+        mode_message = (
+            "Mock twinning mode is enabled, so CIF files are not required."
+            if use_mock_twinning
+            else "Real twinning mode is enabled, so NiTi CIF files are required."
+        )
         raise RuntimeError(
             "Missing required input files:\n"
             f"{missing_list}\n"
+            f"{mode_message}\n"
             "Provide these files before running the structure-generation workflow."
         )
 

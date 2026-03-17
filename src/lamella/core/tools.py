@@ -110,6 +110,65 @@ def generate_twin_parameters(epsilon, orientation_sample, strain, logger=None):
     return pd.DataFrame(data)
 
 
+def generate_mock_twin_parameters(epsilon, orientation_sample, strain, logger=None):
+    """
+    Generate synthetic twinning parameters for smoke testing the geometry pipeline
+    without crystallographic CIF inputs.
+    """
+    logger = logger or logging.getLogger("Twinning")
+    rng = np.random.default_rng(42)
+
+    logger.warning(
+        "Using mock twinning mode. The generated lamellae are suitable for testing the "
+        "pipeline, not for scientific interpretation."
+    )
+
+    rows = []
+    for gi, eu in enumerate(orientation_sample):
+        normal = rng.normal(size=3)
+        normal /= np.linalg.norm(normal)
+
+        lamella_orientation = [
+            float((eu[0] + rng.uniform(-0.15, 0.15)) % (2 * np.pi)),
+            float(np.clip(eu[1] + rng.uniform(-0.1, 0.1), 0, np.pi)),
+            float((eu[2] + rng.uniform(-0.15, 0.15)) % (2 * np.pi)),
+        ]
+
+        volume_fraction = float(np.clip(0.05 + 0.01 * np.sin(gi), 0.03, 0.08))
+        propensity = 0.55 if gi % 4 == 0 else 0.05
+
+        twinning_strain = np.array([
+            [epsilon, 0.0, 0.0],
+            [0.0, -epsilon / 2, 0.0],
+            [0.0, 0.0, -epsilon / 2],
+        ])
+
+        rows.append(
+            {
+                "grain_id": gi,
+                "n_x": float(normal[0]),
+                "n_y": float(normal[1]),
+                "n_z": float(normal[2]),
+                "Schmid factor": propensity,
+                "Twin volume fraction": volume_fraction,
+                "phi1_g": eu[0],
+                "PHI_g": eu[1],
+                "phi2_g": eu[2],
+                "phi1_l": lamella_orientation[0],
+                "PHI_l": lamella_orientation[1],
+                "phi2_l": lamella_orientation[2],
+                "twinning_strain_xx": float(twinning_strain[0, 0]),
+                "twinning_strain_yy": float(twinning_strain[1, 1]),
+                "twinning_strain_zz": float(twinning_strain[2, 2]),
+                "twinning_strain_xy": 0.0,
+                "twinning_strain_yz": 0.0,
+                "twinning_strain_zx": 0.0,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
 def initialize_lattice_parameters():
     """Initializes lattice parameters for parent and product phases."""
     parent_params = {'type': 'cubic', 'a': 3.015}

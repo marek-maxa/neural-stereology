@@ -30,6 +30,9 @@ htmlcov/
 simulation.log
 src/lamella/simulation.log
 src/lamella/data/
+src/lamella/tessellation
+src/lamella/inner_cells
+src/lamella/orientation
 
 # Generated mesh / solver artifacts
 *.geo
@@ -37,3 +40,4 @@ src/lamella/data/
 *.msh4
 *.stcell
 *.pckl
+src/lamella/result/*.pov

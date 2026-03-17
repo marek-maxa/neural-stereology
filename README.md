@@ -22,6 +22,7 @@ The currently implemented part of the repository is the 3D structure-generation 
 ## Repository Structure
 
 - `src/lamella/` — current module for synthetic 3D structure generation
+- `scripts/` — helper scripts for bootstrap and development workflows
 - `pyproject.toml` — Python environment and dependency definition
 - `README.md` — project overview
 
@@ -37,6 +38,14 @@ uv sync --python 3.12
 
 The currently available workflow is run from the repository root:
 
+Smoke-test bootstrap:
+
+```bash
+python scripts/generate_mock_inputs.py --cells 8
+```
+
+Then run the generator:
+
 ```bash
 uv run --directory src/lamella python main.py --config ./model/config.json
 ```
@@ -45,4 +54,4 @@ uv run --directory src/lamella python main.py --config ./model/config.json
 
 - the repository is at an early stage
 - only part of the intended full workflow is implemented so far
-- runtime input data are not stored in the repository
+- a mock mode is available for smoke testing without material-specific CIF inputs

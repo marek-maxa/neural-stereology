@@ -43,6 +43,7 @@ def setup_logger(log_file=None, level=logging.INFO):
     # Create a custom logger
     logger = logging.getLogger("Twinning")
     logger.setLevel(level)
+    logger.handlers.clear()
 
     # Create handlers (console and file, if specified)
     console_handler = logging.StreamHandler()
@@ -76,6 +77,7 @@ def generate_twin_parameters(epsilon, orientation_sample, strain, logger=None):
         pd.DataFrame: DataFrame containing the generated twinning parameters.
     """
     logger = logger or logging.getLogger("Twinning")
+    os.makedirs("./data", exist_ok=True)
 
     oris = [eu2mat(eu) for eu in orientation_sample]
 

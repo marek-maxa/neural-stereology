@@ -21,6 +21,8 @@ License:
 
 import argparse
 import logging
+import os
+from pathlib import Path
 import core.runner as runner
 import core.tools as tools
 import json
@@ -46,14 +48,46 @@ def setup_logging(log_file='simulation.log'):
     return tools.setup_logger(log_file=log_file, level=logging.ERROR)
 
 
+def validate_required_inputs(config):
+    """
+    Validate that the required runtime inputs are present before the simulation starts.
+    """
+    required_paths = {
+        "tessellation_path": config.get("tessellation_path"),
+        "inner_cells_path": config.get("inner_cells_path"),
+        "orientation_sample_path": config.get("orientation_sample_path"),
+        "model/NiTi_pm3m.cif": "./model/NiTi_pm3m.cif",
+        "model/NiTiB19p.cif": "./model/NiTiB19p.cif",
+    }
+
+    missing = []
+    for label, raw_path in required_paths.items():
+        if not raw_path:
+            missing.append(f"{label} (not set)")
+            continue
+
+        if not Path(raw_path).exists():
+            missing.append(raw_path)
+
+    if missing:
+        missing_list = "\n".join(f"- {path}" for path in missing)
+        raise RuntimeError(
+            "Missing required input files:\n"
+            f"{missing_list}\n"
+            "Provide these files before running the structure-generation workflow."
+        )
+
+
 def run_simulation(config, strain, logger):
     """
     Run the simulation using the provided configuration and logger.
     """
     try:
         logger.info("Starting the deformation simulation.")
-        #print(config)
-        cells = runner.deform_tessellation(**config, strain=strain,logger=logger)
+        config = dict(config)
+        config.setdefault("strain", strain)
+        validate_required_inputs(config)
+        cells = runner.deform_tessellation(**config, logger=logger)
         logger.info("Simulation completed successfully.")
         return cells
     except Exception as e:
@@ -66,6 +100,7 @@ def save_results(cells, logger, output_path="./data/results.json"):
     Save simulation results to a JSON file.
     """
     logger.info("Saving simulation results.")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     tools.save_simulation_results(cells, output_path)
     logger.info("Simulation results saved successfully.")
 

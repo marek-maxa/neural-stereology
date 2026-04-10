@@ -75,6 +75,7 @@ class Cell:
         self.orientation = []
         self.lamella_orientation = []
         self.lamellae = []
+        self.runtime_metadata = {}
 
     def number_of_lamellae(self):
         """

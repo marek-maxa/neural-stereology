@@ -221,7 +221,16 @@ def place_lamellar_centers(cell, m, max_attempts):
     return sorted(points)
 
 
-def grow(cell, max_attempts, max_lamellae, max_feret, solution_tolerance, fixed_num_of_lamellae_points=False, logger=None):
+def grow(
+    cell,
+    max_attempts,
+    max_lamellae,
+    max_feret,
+    solution_tolerance,
+    fixed_num_of_lamellae_points=False,
+    logger=None,
+    return_metadata=False,
+):
     """
     Tries to place lamellae inside the cell using a dynamic placement method.
 
@@ -244,6 +253,19 @@ def grow(cell, max_attempts, max_lamellae, max_feret, solution_tolerance, fixed_
     best_width = 0
     best_points = []
     best_vfs = float('inf')
+    last_attempt = 0
+    effective_target_volume = max(target_volume, np.finfo(float).eps)
+    metadata = {
+        "solver": "dynamic_placement",
+        "target_volume": float(target_volume),
+        "max_attempts": int(max_attempts),
+        "attempts_executed": 0,
+        "solution_found": False,
+        "used_best_effort_solution": False,
+        "forced_single_lamella": False,
+        "selected_lamellae": 0,
+        "best_relative_error": None,
+    }
 
 
     #fixed_num_of_lamellae_points=True
@@ -258,10 +280,11 @@ def grow(cell, max_attempts, max_lamellae, max_feret, solution_tolerance, fixed_
     #print(m,end=',')
     #print('==========================')
     #print('==========================')
-    max_attempts=10000
+    max_attempts = int(max_attempts)
     #print(max_attempts)
     #solution_tolerance = 0.01
     for attempt in range(1, max_attempts + 1):
+        last_attempt = attempt
         # Generate a random number of lamellae if not fixed
         if not fixed_num_of_lamellae_points:
             m = generate_num_of_lamellae(cell, max_lamellae, max_feret, poisson_strategy)
@@ -294,24 +317,41 @@ def grow(cell, max_attempts, max_lamellae, max_feret, solution_tolerance, fixed_
 
             # Stop early if within tolerance
             if vfs_closest <= solution_tolerance * target_volume:
+                metadata.update({
+                    "attempts_executed": attempt,
+                    "solution_found": True,
+                    "selected_lamellae": len(points),
+                    "best_relative_error": float(vfs_closest / effective_target_volume),
+                })
                 #print(f'Lam m={m}||',end='||')
                 #print('==========================')
                 #print(m)
                 #print('==========================')
                 #print(vfs_closest,end=',')
                 #print(_generate_lamellae(cell, points, optimal_width),end='||')
-                return _generate_lamellae(cell, points, optimal_width)
+                lamellae = _generate_lamellae(cell, points, optimal_width)
+                return (lamellae, metadata) if return_metadata else lamellae
 
     # Save the best solution if no exact match was found
-    logger.warning("Maximum number of attempts reached.")
+    metadata["attempts_executed"] = last_attempt
+    if logger:
+        logger.warning("Maximum number of attempts reached.")
     #print(f'Number of lamella {m}')
     if best_points:
+        metadata.update({
+            "solution_found": True,
+            "used_best_effort_solution": True,
+            "selected_lamellae": len(best_points),
+            "best_relative_error": float(best_vfs / effective_target_volume),
+        })
         #print("Maximum number of attempts reached.",end='')
-        return _generate_lamellae(cell, best_points, best_width)
+        lamellae = _generate_lamellae(cell, best_points, best_width)
+        return (lamellae, metadata) if return_metadata else lamellae
     else:
         #if no solution found we fix number of lamella to 1
         #print('Number of lamella forced to 1')
         for attempt in range(1, max_attempts + 1):
+            last_attempt = attempt
             # Generate a random number of lamellae if not fixed
             m=1
                 #print(poisson_strategy)
@@ -343,18 +383,33 @@ def grow(cell, max_attempts, max_lamellae, max_feret, solution_tolerance, fixed_
     
                 # Stop early if within tolerance
                 if vfs_closest <= solution_tolerance * target_volume:
+                    metadata.update({
+                        "attempts_executed": last_attempt,
+                        "solution_found": True,
+                        "forced_single_lamella": True,
+                        "selected_lamellae": len(points),
+                        "best_relative_error": float(vfs_closest / effective_target_volume),
+                    })
                     #print(f'Lam m={m}||',end='||')
                     #print('==========================')
                     #print(m)
                     #print('==========================')
                     #print(vfs_closest,end=',')
                     #print(_generate_lamellae(cell, points, optimal_width),end='||')
-                    return _generate_lamellae(cell, points, optimal_width)
+                    lamellae = _generate_lamellae(cell, points, optimal_width)
+                    return (lamellae, metadata) if return_metadata else lamellae
         #if not best_points:
         #    print(f"No lam,m={m}",end='||')
         #    print(f'{(volume_of_lamellae(cell, points, [min_width] * len(points)))}<={target_volume}<={volume_of_lamellae(cell, points, [max_width] * len(points))}')
-        
-        return []
+
+        metadata.update({
+            "attempts_executed": max(metadata["attempts_executed"], last_attempt),
+            "forced_single_lamella": True,
+            "selected_lamellae": 0,
+            "best_relative_error": None,
+        })
+        lamellae = []
+        return (lamellae, metadata) if return_metadata else lamellae
 
 
 def _compute_max_width(points, theta, gamma, initial_max_width):

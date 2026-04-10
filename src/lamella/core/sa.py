@@ -74,7 +74,12 @@ def simulated_annealing(cell: classes.Cell, tol, N: int, M: int, D: int, L: int,
 
 def initialize_state(cell):
     # Generate the number of lamellae
-    m = solver.generate_num_of_lamellae(cell, 3, poisson_strategy)
+    m = solver.generate_num_of_lamellae(
+        cell,
+        3,
+        max(cell.volume_fraction, np.finfo(float).eps),
+        poisson_strategy,
+    )
     #print(m)
 
     # Basic parameters of a cell

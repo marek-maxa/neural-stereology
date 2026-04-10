@@ -41,11 +41,11 @@ def load_config(config_path):
         raise RuntimeError(f"Error parsing the JSON configuration file: {config_path}.")
 
 
-def setup_logging(log_file='simulation.log'):
+def setup_logging(log_file='simulation.log', log_level="INFO"):
     """
     Setup logger for the simulation.
     """
-    return tools.setup_logger(log_file=log_file, level=logging.ERROR)
+    return tools.setup_logger(log_file=log_file, level=tools.normalize_log_level(log_level))
 
 
 def validate_required_inputs(config):
@@ -95,6 +95,7 @@ def run_simulation(config, strain, logger):
         logger.info("Starting the deformation simulation.")
         config = dict(config)
         config.setdefault("strain", strain)
+        config.pop("log_level", None)
         validate_required_inputs(config)
         cells = runner.deform_tessellation(**config, logger=logger)
         logger.info("Simulation completed successfully.")
@@ -122,15 +123,28 @@ def assess_results(cells, segments, logger):
     tools.check_precision(cells, segments, logger)
 
 
-def main(config_path, twinning_strain='StrainSymGLTwin', assess_results_flag=False, get_results=False):
+def main(
+    config_path,
+    twinning_strain='StrainSymGLTwin',
+    assess_results_flag=False,
+    get_results=False,
+    workers=None,
+    progress_interval=None,
+    log_level=None,
+):
     """
     Main function to orchestrate the simulation run.
     """
-    logger = setup_logging()
-
     # Load config
-    logger.info("Loading configuration.")
     config = load_config(config_path)
+
+    if workers is not None:
+        config["parallel_workers"] = workers
+    if progress_interval is not None:
+        config["progress_report_interval"] = progress_interval
+
+    logger = setup_logging(log_level=log_level or config.get("log_level", "INFO"))
+    logger.info("Loading configuration from %s.", config_path)
 
     # Run the simulation
     cells, segments = run_simulation(config, twinning_strain, logger)
@@ -150,7 +164,31 @@ if __name__ == "__main__":
         "--config", type=str, default="./model/config.json", help="Path to the configuration JSON file."
     )
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of parallel workers for lamella growth. Use 0 to auto-detect CPU cores.",
+    )
+    parser.add_argument(
+        "--progress-interval",
+        type=int,
+        default=None,
+        help="Log progress after this many processed active cells.",
+    )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        default=None,
+        help="Console/file log level override (e.g. INFO, WARNING, DEBUG).",
+    )
+    parser.add_argument(
         "--assess", action="store_true", help="Assess the results after simulation."
     )
     args = parser.parse_args()
-    main(config_path=args.config, assess_results_flag=args.assess)
+    main(
+        config_path=args.config,
+        assess_results_flag=args.assess,
+        workers=args.workers,
+        progress_interval=args.progress_interval,
+        log_level=args.log_level,
+    )

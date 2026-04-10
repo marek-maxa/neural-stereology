@@ -24,6 +24,10 @@ import os
 import shutil
 import math
 import subprocess
+import time
+import random
+import statistics
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 
 import core.classes as classes
@@ -257,7 +261,174 @@ def twinning_threshold(cells, min_loc=0.4, max_loc=0.2):
     return cells
 
 
-def perform_twinning(cells, max_lamellae_per_cell, use_simul_annealing, logger=None):
+def _should_twin(cell):
+    """
+    Decide whether the cell should go through lamella growth.
+    """
+    return bool(cell.is_inner and cell.twinning_propensity > cell.twinning_threshold)
+
+
+def _resolve_parallel_workers(parallel_workers):
+    """
+    Resolve worker count. A value of 0 means automatic CPU-core detection.
+    """
+    if parallel_workers is None:
+        return 1
+
+    parallel_workers = int(parallel_workers)
+    if parallel_workers == 0:
+        return max(1, os.cpu_count() or 1)
+
+    return max(1, parallel_workers)
+
+
+def _seed_rng_for_cell(base_seed, cell_id):
+    """
+    Seed Python and NumPy RNGs per cell so parallel workers do not share RNG state.
+    """
+    if base_seed is None:
+        seed = int.from_bytes(os.urandom(8), "little") ^ (os.getpid() << 16) ^ int(cell_id)
+    else:
+        seed = int(base_seed) + int(cell_id)
+
+    random.seed(seed)
+    np.random.seed(seed % (2 ** 32))
+    return seed
+
+
+def _process_cell_task(task):
+    """
+    Worker entry point for one cell.
+    """
+    index, cell, max_lamellae_per_cell, use_simul_annealing, max_feret, random_seed = task
+    seed = _seed_rng_for_cell(random_seed, cell.cid)
+    start_time = time.perf_counter()
+
+    metadata = {
+        "eligible": True,
+        "solver": "simulated_annealing" if use_simul_annealing else "dynamic_placement",
+        "seed": seed,
+        "status": "started",
+    }
+
+    if use_simul_annealing:
+        tol = 0.01
+        N = 1000
+        M = 100
+        D = 0.001
+        L = 0.0005
+        T0 = 0.01
+        alpha = 0.99
+
+        state = sa.simulated_annealing(cell, tol, N, M, D, L, T0, alpha)
+        points = [lam.center for lam in state]
+        widths = [lam.width for lam in state]
+        cell.lamellae = sa.save_lamellae(cell, points, widths)
+
+        target_volume = cell.volume * cell.volume_fraction
+        actual_volume = sum(lamella.volume for lamella in cell.lamellae)
+        metadata.update({
+            "selected_lamellae": len(cell.lamellae),
+            "target_volume": float(target_volume),
+            "best_relative_error": (
+                float(abs(actual_volume - target_volume) / max(target_volume, np.finfo(float).eps))
+                if target_volume >= 0
+                else None
+            ),
+        })
+    else:
+        cell.lamellae, solver_metadata = solver.grow(
+            cell,
+            MAX_ITERATION,
+            max_lamellae_per_cell,
+            max_feret,
+            TOLERANCE,
+            FIXED_LAMELLAR_NUMBER,
+            logger=None,
+            return_metadata=True,
+        )
+        metadata.update(solver_metadata)
+
+    metadata.update({
+        "status": "grown" if cell.lamellae else "eligible_without_lamellae",
+        "duration_seconds": float(time.perf_counter() - start_time),
+        "lamellae_count": len(cell.lamellae),
+    })
+    cell.runtime_metadata = metadata
+
+    return index, cell
+
+
+def _log_growth_progress(logger, completed, total, elapsed, grown_cells):
+    """
+    Log lamella-growth progress together with an ETA estimate.
+    """
+    if not logger or total == 0:
+        return
+
+    processing_rate = completed / elapsed if elapsed > 0 else 0.0
+    remaining = total - completed
+    eta_seconds = remaining / processing_rate if processing_rate > 0 else None
+    eta_text = tools.format_duration(eta_seconds) if eta_seconds is not None else "n/a"
+    logger.info(
+        "Lamella growth progress: %s/%s active cells done (%.1f%%), grown=%s, elapsed=%s, ETA=%s.",
+        completed,
+        total,
+        (completed / total) * 100,
+        grown_cells,
+        tools.format_duration(elapsed),
+        eta_text,
+    )
+
+
+def _log_growth_summary(cells, logger, elapsed_seconds):
+    """
+    Log summary statistics to highlight where lamella growth spends time.
+    """
+    if not logger:
+        return
+
+    eligible_cells = [cell for cell in cells if cell.runtime_metadata.get("eligible")]
+    if not eligible_cells:
+        logger.info("Lamella growth finished in %s. No active cells required twinning.", tools.format_duration(elapsed_seconds))
+        return
+
+    durations = [cell.runtime_metadata["duration_seconds"] for cell in eligible_cells]
+    grown_cells = [cell for cell in eligible_cells if cell.lamellae]
+    slowest_cells = sorted(
+        eligible_cells,
+        key=lambda cell: cell.runtime_metadata.get("duration_seconds", 0.0),
+        reverse=True,
+    )[:5]
+
+    logger.info(
+        "Lamella growth finished in %s. Eligible cells: %s, cells with lamellae: %s, mean active-cell time: %s, median: %s, max: %s.",
+        tools.format_duration(elapsed_seconds),
+        len(eligible_cells),
+        len(grown_cells),
+        tools.format_duration(statistics.fmean(durations)),
+        tools.format_duration(statistics.median(durations)),
+        tools.format_duration(max(durations)),
+    )
+    logger.info(
+        "Slowest active cells: %s",
+        ", ".join(
+            f"cell {cell.cid}={tools.format_duration(cell.runtime_metadata['duration_seconds'])} "
+            f"({cell.runtime_metadata.get('lamellae_count', 0)} lamellae)"
+            for cell in slowest_cells
+        ),
+    )
+
+
+def perform_twinning(
+    cells,
+    max_lamellae_per_cell,
+    use_simul_annealing,
+    parallel_workers=0,
+    progress_report_interval=10,
+    random_seed=None,
+    logger=None,
+):
 
     """
     Performs the twinning operation on the cells in the tessellation. If a cell
@@ -275,47 +446,72 @@ def perform_twinning(cells, max_lamellae_per_cell, use_simul_annealing, logger=N
     cells = twinning_threshold(cells)
 
     max_feret = np.max(np.array([cell.volume_fraction for cell in cells]))
+    progress_report_interval = max(1, int(progress_report_interval))
+    worker_count = _resolve_parallel_workers(parallel_workers)
 
-    # Perform the twinning operation for cells with a propensity greater than their threshold
-    if use_simul_annealing:
-        print('Using simulated annealing/',end='')
-    else:
-        print('Dynamic placement/',end='')
-    for cid,cell in enumerate(cells):
-        #print(f'{cell.cid}, is inner:{cell.is_inner}')
-        if cell.is_inner and cell.twinning_propensity > cell.twinning_threshold:
-            # Grow lamellae for inner cells with sufficient twinning propensity
-            #print(max_lamellae_per_cell)
-            #print('new cell',end=',')
-            if use_simul_annealing:
-                tol = 0.01
-                N = 1000
-                M = 100
-                D = 0.001
-                L = 0.0005
-                T0 = 0.01
-                alpha = 0.99
-
-                state = sa.simulated_annealing(cell, tol, N, M, D, L, T0, alpha)
-
-                # Save lamellae
-                points = [lam.center for lam in state]
-                widths = [lam.width for lam in state]
-                cell.lamellae = sa.save_lamellae(cell, points, widths)
-                #print(cell.number_of_lamellae(),end=',')
-
-            else:
-                cell.lamellae = solver.grow(cell, MAX_ITERATION, max_lamellae_per_cell, max_feret, TOLERANCE, FIXED_LAMELLAR_NUMBER,
-                                            logger)
+    active_indices = []
+    for index, cell in enumerate(cells):
+        if _should_twin(cell):
+            active_indices.append(index)
         else:
-            # Clear lamellae for other cells
             cell.lamellae = []
+            cell.runtime_metadata = {
+                "eligible": False,
+                "status": "skipped",
+                "duration_seconds": 0.0,
+                "lamellae_count": 0,
+            }
+
+    if logger:
+        logger.info(
+            "Starting lamella growth for %s active cells out of %s total. Solver=%s, workers=%s, progress interval=%s.",
+            len(active_indices),
+            len(cells),
+            "simulated_annealing" if use_simul_annealing else "dynamic_placement",
+            worker_count,
+            progress_report_interval,
+        )
+
+    if not active_indices:
+        return cells
+
+    start_time = time.perf_counter()
+    completed = 0
+    grown_cells = 0
+
+    if worker_count == 1 or len(active_indices) == 1:
+        for index in active_indices:
+            _, processed_cell = _process_cell_task(
+                (index, cells[index], max_lamellae_per_cell, use_simul_annealing, max_feret, random_seed)
+            )
+            cells[index] = processed_cell
+            completed += 1
+            grown_cells += int(bool(processed_cell.lamellae))
+            if completed % progress_report_interval == 0 or completed == len(active_indices):
+                _log_growth_progress(logger, completed, len(active_indices), time.perf_counter() - start_time, grown_cells)
+    else:
+        tasks = [
+            (index, cells[index], max_lamellae_per_cell, use_simul_annealing, max_feret, random_seed)
+            for index in active_indices
+        ]
+        with ProcessPoolExecutor(max_workers=worker_count) as executor:
+            future_map = {executor.submit(_process_cell_task, task): task[0] for task in tasks}
+            for future in as_completed(future_map):
+                index, processed_cell = future.result()
+                cells[index] = processed_cell
+                completed += 1
+                grown_cells += int(bool(processed_cell.lamellae))
+                if completed % progress_report_interval == 0 or completed == len(active_indices):
+                    _log_growth_progress(logger, completed, len(active_indices), time.perf_counter() - start_time, grown_cells)
+
+    _log_growth_summary(cells, logger, time.perf_counter() - start_time)
 
     return cells
 
 def deform_tessellation(macroscopic_strain, orientation_sample_path, max_lamellae_per_cell, min_distance_from_endpoints,
                         min_distance_among_lamellae, min_lamella_width, max_lamella_width, growth_rates,
                         tessellation_path, inner_cells_path, strain, use_simul_annealing,
+                        parallel_workers=0, progress_report_interval=10, random_seed=None,
                         use_mock_twinning=False, mock_active_fraction=0.25,
                         mock_volume_fraction_base=0.05, mock_volume_fraction_jitter=0.01,
                         logger=None):
@@ -338,12 +534,14 @@ def deform_tessellation(macroscopic_strain, orientation_sample_path, max_lamella
     """
 
     # Step 1: Import data from files
-
+    workflow_start = time.perf_counter()
+    step_start = time.perf_counter()
     generators, radii, inner_cells = import_tessellation(tessellation_path,inner_cells_path)
     orientations = import_orientation(orientation_sample_path)
-    logger.info("Imported data from input files.")
+    logger.info("Step 1/6 finished: imported input files in %s.", tools.format_duration(time.perf_counter() - step_start))
 
     # Step 2: Compute twinning parameters
+    step_start = time.perf_counter()
     lamellae_orientations, volume_fractions, normals, propensity, strain = compute_twinning_parameters(macroscopic_strain,
                                                                                                orientations, strain,
                                                                                                "./data",
@@ -356,28 +554,47 @@ def deform_tessellation(macroscopic_strain, orientation_sample_path, max_lamella
     #print(f'volfrac:{volume_fractions}')
     #print(strain)
     #print('======================')
-    logger.info("Computed twinning parameters based on the input.")
+    logger.info("Step 2/6 finished: computed twinning parameters in %s.", tools.format_duration(time.perf_counter() - step_start))
 
     # Step 3: Generate Feret projection and volume function approximation
+    step_start = time.perf_counter()
     a, b, volume_functions = generate_feret('./data/tessellation', './data/normals', len(generators))
-    logger.info("Feret projection computed using CPP code.")
+    logger.info("Step 3/6 finished: computed Feret projection in %s.", tools.format_duration(time.perf_counter() - step_start))
     #print(inner_cells_path)
     #print(inner_cells)
     # Step 4: Initialize cells in the tessellation
+    step_start = time.perf_counter()
     cells = initialize_cells(generators, radii, a, b, volume_fractions, normals, propensity, volume_functions,
                              orientations, lamellae_orientations, inner_cells, min_distance_from_endpoints,
                              min_distance_among_lamellae, min_lamella_width, max_lamella_width, growth_rates,strain)
-    logger.info("Tessellation cells initialized.")
+    logger.info("Step 4/6 finished: initialized %s cells in %s.", len(cells), tools.format_duration(time.perf_counter() - step_start))
 
     # Step 5: Perform twinning on cells
-    logger.info("Performing lamellar growth model computations.")
-    cells = perform_twinning(cells, max_lamellae_per_cell, use_simul_annealing, logger)
+    logger.info("Step 5/6 started: performing lamellar growth model computations.")
+    step_start = time.perf_counter()
+    cells = perform_twinning(
+        cells,
+        max_lamellae_per_cell,
+        use_simul_annealing,
+        parallel_workers=parallel_workers,
+        progress_report_interval=progress_report_interval,
+        random_seed=random_seed,
+        logger=logger,
+    )
+    logger.info("Step 5/6 finished in %s.", tools.format_duration(time.perf_counter() - step_start))
     for cell in cells:
         if cell.volume_fraction<0:
             print(cell.volume_fraction)
 
     # Step 6: Prepare the cells for the Neper tool
+    step_start = time.perf_counter()
     segments, small_cells = tools.prepare_for_neper(cells, logger)
+    logger.info(
+        "Step 6/6 finished: prepared Neper inputs and reduced to %s small cells in %s.",
+        len(small_cells),
+        tools.format_duration(time.perf_counter() - step_start),
+    )
+    logger.info("Whole deformation workflow finished in %s.", tools.format_duration(time.perf_counter() - workflow_start))
 
     return small_cells, segments
 

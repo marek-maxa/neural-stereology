@@ -26,6 +26,8 @@ import subprocess
 import logging
 import json
 import shutil
+import math
+import time
 from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
@@ -62,6 +64,36 @@ def setup_logger(log_file=None, level=logging.INFO):
         logger.addHandler(handler)
 
     return logger
+
+
+def normalize_log_level(level):
+    """
+    Normalize a string or numeric log level to a logging constant.
+    """
+    if isinstance(level, int):
+        return level
+
+    normalized = str(level or "INFO").upper()
+    if not hasattr(logging, normalized):
+        raise ValueError(f"Unsupported log level: {level}")
+
+    return getattr(logging, normalized)
+
+
+def format_duration(seconds):
+    """
+    Format elapsed time for concise progress logging.
+    """
+    seconds = max(0.0, float(seconds))
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+
+    minutes, rem_seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{int(minutes)}m {rem_seconds:04.1f}s"
+
+    hours, rem_minutes = divmod(minutes, 60)
+    return f"{int(hours)}h {int(rem_minutes):02d}m {math.floor(rem_seconds):02d}s"
 
 
 def generate_twin_parameters(epsilon, orientation_sample, strain, logger=None):
@@ -283,28 +315,56 @@ def prepare_for_neper(cells, logger=None):
         tuple: (small_segments, small_cells) - Processed segments and cells.
     """
     # Step 1: Run Feret code to get projection data
+    step_start = time.perf_counter()
     run_feret_code()
+    if logger:
+        logger.info("Neper prep 1/8: small-scale Feret projection finished in %s.", format_duration(time.perf_counter() - step_start))
 
     # Step 2: Read Feret data
+    step_start = time.perf_counter()
     small_a, small_b = read_feret_data("./data/feret_small")
+    if logger:
+        logger.info("Neper prep 2/8: Feret data loaded in %s.", format_duration(time.perf_counter() - step_start))
 
     # Step 3: Process the Feret data to extract small cell details
+    step_start = time.perf_counter()
     small_cells, small_generators, small_radii, new_a, new_b = process_feret_data(small_a, small_b, cells)
+    if logger:
+        logger.info(
+            "Neper prep 3/8: selected %s surviving cells in %s.",
+            len(small_cells),
+            format_duration(time.perf_counter() - step_start),
+        )
 
     # Step 4: Write auxiliary files for Neper
+    step_start = time.perf_counter()
     write_auxiliary_files(small_cells, small_generators, small_radii)
+    if logger:
+        logger.info("Neper prep 4/8: auxiliary files written in %s.", format_duration(time.perf_counter() - step_start))
 
     # Step 5: Create the first tessellation using Neper
+    step_start = time.perf_counter()
     create_first_tessellation(small_generators, logger)
+    if logger:
+        logger.info("Neper prep 5/8: first tessellation created in %s.", format_duration(time.perf_counter() - step_start))
 
     # Step 6: Recompute lamellae based on new Feret data
+    step_start = time.perf_counter()
     small_segments = recompute_lamellae(small_cells, new_a, new_b)
+    if logger:
+        logger.info("Neper prep 6/8: lamellae recomputed in %s.", format_duration(time.perf_counter() - step_start))
 
     # Step 7: Write additional files for Neper
+    step_start = time.perf_counter()
     write_additional_files_for_neper(small_cells, small_segments)
+    if logger:
+        logger.info("Neper prep 7/8: lamellar Neper files written in %s.", format_duration(time.perf_counter() - step_start))
 
     # Step 8: Create the second tessellation using Neper
+    step_start = time.perf_counter()
     create_second_tessellation(small_cells, logger)
+    if logger:
+        logger.info("Neper prep 8/8: second tessellation created in %s.", format_duration(time.perf_counter() - step_start))
 
     return small_segments, small_cells
 
@@ -628,7 +688,8 @@ def cell_to_dict(cell):
         'growth_rates': convert_ndarray_to_list(cell.growth_rates),  # Convert ndarray if present
         'orientation': convert_ndarray_to_list(cell.orientation),  # Convert ndarray if present
         'lamella_orientation': convert_ndarray_to_list(cell.lamella_orientation),  # Convert ndarray if present
-        'lamellae': [lamella_to_dict(lamella) for lamella in cell.lamellae]  # Assuming you also want to convert lamellae to dicts
+        'lamellae': [lamella_to_dict(lamella) for lamella in cell.lamellae],  # Assuming you also want to convert lamellae to dicts
+        'runtime_metadata': cell.runtime_metadata,
     }
     return cell_dict
 

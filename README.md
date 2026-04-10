@@ -50,6 +50,20 @@ Then run the generator:
 uv run --directory src/lamella python main.py --config ./model/config.json
 ```
 
+The generator now reports progress for the main workflow stages and for active-cell lamella growth, including elapsed time and an ETA estimate.
+
+Parallel lamella growth can be configured in `src/lamella/model/config.json`:
+
+- `parallel_workers: 0` uses all available CPU cores
+- `progress_report_interval` controls how often active-cell progress is logged
+- `log_level` controls console and file verbosity
+
+These settings can also be overridden from the command line:
+
+```bash
+uv run --directory src/lamella python main.py --config ./model/config.json --workers 8 --progress-interval 10
+```
+
 ## Visualization
 
 The generated tessellation can be visualized from:
@@ -69,6 +83,19 @@ A helper script is also available:
 ```bash
 python scripts/visualize_tess.py --tess src/lamella/data/2scale.tess --output-stem src/lamella/visualization/2scale
 ```
+
+The helper can also color the final multiscale tessellation by the simulated twinning propensity
+stored in `src/lamella/data/results.json`:
+
+```bash
+python scripts/visualize_tess.py \
+  --tess src/lamella/data/2scale.tess \
+  --output-stem src/lamella/visualization/2scale-propensity \
+  --color-by propensity
+```
+
+The propensity render uses a blue-white-red color map by default and removes temporary helper files after the image is created.
+Pass `--keep-temp` if you want to keep the auxiliary files for debugging or manual post-processing.
 
 ## Notes
 

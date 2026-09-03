@@ -21,13 +21,15 @@ License:
 
 import argparse
 import inspect
-import logging
+import json
+import math
+import numbers
 import os
 import sys
 from pathlib import Path
+
 import core.runner as runner
 import core.tools as tools
-import json
 
 
 def load_config(config_path):
@@ -82,6 +84,79 @@ def validate_required_inputs(config):
         )
 
 
+def validate_simulation_config(config):
+    """Validate the shape and basic bounds of simulation configuration values."""
+    parameters = inspect.signature(runner.deform_tessellation).parameters
+    accepted_keys = set(parameters) - {"logger"}
+    unknown_keys = sorted(set(config) - accepted_keys)
+    if unknown_keys:
+        raise RuntimeError(f"Unsupported config keys: {', '.join(unknown_keys)}")
+
+    missing_keys = sorted(
+        name
+        for name, parameter in parameters.items()
+        if name != "logger"
+        and parameter.default is inspect.Parameter.empty
+        and name not in config
+    )
+    if missing_keys:
+        raise RuntimeError(f"Missing required config keys: {', '.join(missing_keys)}")
+
+    def require_real(name, *, minimum=None):
+        value = config.get(name)
+        if isinstance(value, bool) or not isinstance(value, numbers.Real) or not math.isfinite(value):
+            raise RuntimeError(f"Config value '{name}' must be a finite number.")
+        if minimum is not None and value < minimum:
+            raise RuntimeError(f"Config value '{name}' must be at least {minimum}.")
+
+    require_real("macroscopic_strain")
+    for name in (
+        "min_distance_from_endpoints",
+        "min_distance_among_lamellae",
+        "min_lamella_width",
+        "max_lamella_width",
+    ):
+        require_real(name, minimum=0)
+
+    if config["min_lamella_width"] > config["max_lamella_width"]:
+        raise RuntimeError("Config value 'min_lamella_width' cannot exceed 'max_lamella_width'.")
+
+    max_lamellae = config.get("max_lamellae_per_cell")
+    if isinstance(max_lamellae, bool) or not isinstance(max_lamellae, numbers.Integral) or max_lamellae < 1:
+        raise RuntimeError("Config value 'max_lamellae_per_cell' must be a positive integer.")
+
+    growth_rates = config.get("growth_rates")
+    if not isinstance(growth_rates, list) or len(growth_rates) < max_lamellae:
+        raise RuntimeError(
+            "Config value 'growth_rates' must contain at least one finite positive value "
+            "for every allowed lamella."
+        )
+    if any(
+        isinstance(rate, bool)
+        or not isinstance(rate, numbers.Real)
+        or not math.isfinite(rate)
+        or rate <= 0
+        for rate in growth_rates
+    ):
+        raise RuntimeError("All 'growth_rates' values must be finite positive numbers.")
+
+    for name, minimum in (("parallel_workers", 0), ("progress_report_interval", 1)):
+        value = config.get(name)
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, numbers.Integral) or value < minimum
+        ):
+            raise RuntimeError(f"Config value '{name}' must be an integer of at least {minimum}.")
+
+    random_seed = config.get("random_seed")
+    if random_seed is not None and (
+        isinstance(random_seed, bool) or not isinstance(random_seed, numbers.Integral)
+    ):
+        raise RuntimeError("Config value 'random_seed' must be an integer or null.")
+
+    if not isinstance(config.get("use_simul_annealing"), bool):
+        raise RuntimeError("Config value 'use_simul_annealing' must be a boolean.")
+
+
 def run_simulation(config, strain, logger):
     """
     Run the simulation using the provided configuration and logger.
@@ -91,15 +166,7 @@ def run_simulation(config, strain, logger):
         config = dict(config)
         config.setdefault("strain", strain)
         config.pop("log_level", None)
-        allowed_keys = set(inspect.signature(runner.deform_tessellation).parameters)
-        removed_unknown_keys = sorted(key for key in config if key not in allowed_keys)
-        for key in removed_unknown_keys:
-            config.pop(key, None)
-        if removed_unknown_keys:
-            logger.warning(
-                "Ignoring unsupported config keys: %s",
-                ", ".join(removed_unknown_keys),
-            )
+        validate_simulation_config(config)
         validate_required_inputs(config)
         cells = runner.deform_tessellation(**config, logger=logger)
         logger.info("Simulation completed successfully.")

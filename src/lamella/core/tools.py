@@ -443,15 +443,37 @@ def read_feret_data(feret_file_path):
     """Reads Feret projection data from a file."""
     small_a, small_b = [], []
     with open(feret_file_path, 'r', encoding='utf-8') as feret_file:
-        for line in feret_file:
-            values = line.strip().split(" ")
-            small_a.append(float(values[0]))
-            small_b.append(float(values[1]))
+        for line_number, line in enumerate(feret_file, start=1):
+            values = line.split()
+            if not values:
+                continue
+            if len(values) < 2:
+                raise RuntimeError(
+                    f"Invalid Feret row {line_number}: expected two columns."
+                )
+            try:
+                point_a, point_b = float(values[0]), float(values[1])
+            except ValueError as error:
+                raise RuntimeError(
+                    f"Invalid numeric value in Feret row {line_number}."
+                ) from error
+            if not math.isfinite(point_a) or not math.isfinite(point_b):
+                raise RuntimeError(
+                    f"Invalid Feret row {line_number}: values must be finite."
+                )
+            small_a.append(point_a)
+            small_b.append(point_b)
     return small_a, small_b
 
 
 def process_feret_data(small_a, small_b, cells):
     """Processes Feret data to extract small cells and their details."""
+    if len(small_a) != len(small_b) or len(small_a) != len(cells):
+        raise RuntimeError(
+            "Feret result lengths do not match the cell collection: "
+            f"left={len(small_a)}, right={len(small_b)}, cells={len(cells)}."
+        )
+
     small_cells, small_generators, small_radii, new_a, new_b = [], [], [], [], []
 
     for i in range(len(small_a)):
@@ -524,15 +546,37 @@ def recompute_lamellae(small_cells, new_a, new_b):
 
 def write_additional_files_for_neper(small_cells, small_segments):
     """Write additional files for Neper, including 'cell' and 'lam_wid'."""
+    if len(small_cells) != len(small_segments):
+        raise RuntimeError(
+            "Cannot write Neper inputs: cell and segment counts differ "
+            f"({len(small_cells)} != {len(small_segments)})."
+        )
+
     filtered_segments_per_cell = []
 
-    for segments in small_segments:
+    for cell_index, segments in enumerate(small_segments, start=1):
+        if not segments:
+            raise RuntimeError(f"Cannot write Neper inputs: cell {cell_index} has no segments.")
+        for width, label in segments:
+            if not math.isfinite(width) or width <= 0:
+                raise RuntimeError(
+                    f"Cannot write Neper inputs: cell {cell_index} has an invalid segment width."
+                )
+            if label not in {"gap", "lamella"}:
+                raise RuntimeError(
+                    f"Cannot write Neper inputs: cell {cell_index} has unknown label '{label}'."
+                )
         filtered_segments = [seg for seg in segments if seg[0] >= 0.001]
         if not filtered_segments:
             filtered_segments = [max(segments, key=lambda seg: seg[0])]
         filtered_segments_per_cell.append(filtered_segments)
 
     for i, cell in enumerate(small_cells):
+        cell.runtime_metadata["neper_segments"] = [
+            {"width": float(width), "label": label}
+            for width, label in filtered_segments_per_cell[i]
+        ]
+        cell.runtime_metadata.pop("neper_simplification", None)
         file_name = f"./data/cell{i + 1}"
         with open(file_name, "w", encoding='utf-8') as file:
             for seg in filtered_segments_per_cell[i]:
@@ -590,7 +634,7 @@ def create_second_tessellation(small_cells, logger=None):
                 (index for index, spec in enumerate(working_specs) if len(spec["widths"]) > 1),
                 key=lambda index: (-len(working_specs[index]["widths"]), index),
             )
-            simplified_mids = []
+            simplified_cells = []
 
             if logger:
                 logger.warning(
@@ -598,20 +642,42 @@ def create_second_tessellation(small_cells, logger=None):
                 )
 
             for candidate_index in candidate_indices:
+                dominant_index = max(
+                    range(len(working_specs[candidate_index]["widths"])),
+                    key=working_specs[candidate_index]["widths"].__getitem__,
+                )
                 if not _collapse_to_dominant_segment(working_specs[candidate_index]):
                     continue
 
-                simplified_mids.append(working_specs[candidate_index]["mid"])
+                simplified_cells.append((candidate_index, dominant_index))
                 _write_multiscale_cell_specs(data_dir, working_specs)
 
                 try:
                     _run_neper_second_tessellation(command2)
+                    for cell_index, retained_index in simplified_cells:
+                        metadata = small_cells[cell_index].runtime_metadata
+                        original_segments = metadata.get("neper_segments", [])
+                        if retained_index >= len(original_segments):
+                            raise RuntimeError(
+                                "Neper simplification metadata does not match generated inputs."
+                            )
+                        retained_segment = original_segments[retained_index]
+                        metadata["neper_segments"] = [retained_segment]
+                        metadata["neper_simplification"] = {
+                            "lossy": True,
+                            "reason": "neper_flattening_failure",
+                            "original_segment_count": len(original_segments),
+                            "retained_segment": retained_segment,
+                        }
                     if logger:
                         logger.warning(
                             "Successfully created the .tess file for the tessellation with lamellae "
                             "after simplifying %s cell(s): %s.",
-                            len(simplified_mids),
-                            ", ".join(simplified_mids[:10]) + ("..." if len(simplified_mids) > 10 else ""),
+                            len(simplified_cells),
+                            ", ".join(
+                                working_specs[index]["mid"]
+                                for index, _ in simplified_cells[:10]
+                            ) + ("..." if len(simplified_cells) > 10 else ""),
                         )
                     return
                 except subprocess.CalledProcessError as retry_error:
@@ -710,12 +776,22 @@ def save_simulation_results(cells, file_path, logger=None):
 def check_precision(cells, segments, logger=None):
     result_dir = Path(os.getcwd()) / 'data'
 
-    try:
-        os.chdir(result_dir)  # Change to the result directory
+    if len(cells) != len(segments):
+        raise RuntimeError(
+            "Cannot assess precision: cell and segment counts differ "
+            f"({len(cells)} != {len(segments)})."
+        )
 
+    try:
         # Run Neper command
         command = ['neper', '-T', '-loadtess', '2scale.tess', '-statcell', 'vol']
-        subprocess.run(command, check=True, capture_output=True, text=True)
+        subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            cwd=result_dir,
+        )
 
         if logger:
             logger.info("Neper volume analysis completed successfully.")
@@ -731,39 +807,59 @@ def check_precision(cells, segments, logger=None):
             logger.error(f"Error during Neper command execution: {e}")
         raise RuntimeError(f"Error during Neper command execution: {e}")
 
-    volume_file = "2scale.stcell"
-    vfs = [cell.volume_fraction for cell in cells]
+    effective_segments = []
+    for cell, original_segments in zip(cells, segments):
+        neper_segments = cell.runtime_metadata.get("neper_segments")
+        if neper_segments is None:
+            effective_segments.append(original_segments)
+        else:
+            effective_segments.append(
+                [(segment["width"], segment["label"]) for segment in neper_segments]
+            )
 
     # Read the volume data from file
-    with open(volume_file, "r", encoding="utf-8") as f:
-        volumes = [float(line.strip()) for line in f.readlines()]
+    volume_file = result_dir / "2scale.stcell"
+    with open(volume_file, "r", encoding="utf-8") as file_handle:
+        volumes = [float(line) for line in file_handle if line.strip()]
+
+    expected_volume_count = sum(len(cell_segments) for cell_segments in effective_segments)
+    if len(volumes) != expected_volume_count:
+        raise RuntimeError(
+            "Cannot assess precision: Neper returned "
+            f"{len(volumes)} cell volumes, expected {expected_volume_count}."
+        )
+    if any(not math.isfinite(volume) or volume < 0 for volume in volumes):
+        raise RuntimeError("Cannot assess precision: Neper returned invalid cell volumes.")
 
     quotients = []
     index = 0  # Tracks position in the volume list
 
-    for segment in segments:
-        lamella_volume = 0
-        total_volume = 0
+    for cell, cell_segments in zip(cells, effective_segments):
+        cell_volumes = volumes[index:index + len(cell_segments)]
+        index += len(cell_segments)
+        total_volume = sum(cell_volumes)
+        if total_volume <= 0:
+            raise RuntimeError(
+                f"Cannot assess precision: Neper volume for cell {cell.cid} is zero."
+            )
 
-        for (length, label), vf in zip(segment, vfs):
-            volume = volumes[index]  # Fetch corresponding volume
-            total_volume += volume
+        lamella_volume = 0.0
+        for (_, label), volume in zip(cell_segments, cell_volumes):
             if label == "lamella":
                 lamella_volume += volume
-            index += 1  # Move to next volume entry
 
-            # Compute quotient for this segment
-            if total_volume > 0:
-                quotients.append(abs((lamella_volume / total_volume) - vf))
+        quotients.append(abs((lamella_volume / total_volume) - cell.volume_fraction))
 
     # Plot the histogram
-    plt.hist(quotients, bins=20, edgecolor='k', alpha=0.7)
-    plt.xlabel("Deviation from Target Lamellae Volume")
-    plt.ylabel("Frequency")
-    plt.title("Histogram of Lamellae Volume Accuracy")
-    plt.savefig('dev.png')
+    figure, axes = plt.subplots()
+    axes.hist(quotients, bins=20, edgecolor='k', alpha=0.7)
+    axes.set_xlabel("Deviation from Target Lamellae Volume")
+    axes.set_ylabel("Frequency")
+    axes.set_title("Histogram of Lamellae Volume Accuracy")
+    figure.savefig(result_dir / 'dev.png')
+    plt.close(figure)
     if logger:
-        logger.info("Accuracy histogram saved as dev.png.")
+        logger.info("Accuracy histogram saved as %s.", result_dir / 'dev.png')
 
     return None
 

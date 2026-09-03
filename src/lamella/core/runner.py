@@ -38,7 +38,7 @@ import core.sa as sa
 # Constants
 from core.const import (FERET_PARTITION_NUMBER, MAX_ITERATION, TOLERANCE, FIXED_LAMELLAR_NUMBER)
 
-def import_tessellation(tessellation_path,inner_cells_path):
+def import_tessellation(tessellation_path, inner_cells_path):
     """
     Imports tessellation data (generators, radii, inner cells) from pre-defined paths.
 
@@ -52,15 +52,49 @@ def import_tessellation(tessellation_path,inner_cells_path):
     shutil.copy2(tessellation_path, './data')
 
     with open(tessellation_path, 'r') as file:
-        for line in file:
-            this_line = line.split()
-            generators.append([float(this_line[1]), float(this_line[2]), float(this_line[3])])
-            radii.append(float(this_line[4]))
+        for line_number, line in enumerate(file, start=1):
+            values = line.split()
+            if not values:
+                continue
+            if len(values) < 5:
+                raise RuntimeError(
+                    f"Invalid tessellation row {line_number}: expected at least 5 columns."
+                )
+            try:
+                generator = [float(values[1]), float(values[2]), float(values[3])]
+                radius = float(values[4])
+            except ValueError as error:
+                raise RuntimeError(
+                    f"Invalid numeric value in tessellation row {line_number}."
+                ) from error
+            if not all(math.isfinite(value) for value in (*generator, radius)):
+                raise RuntimeError(
+                    f"Invalid tessellation row {line_number}: values must be finite."
+                )
+            generators.append(generator)
+            radii.append(radius)
+
+    if not generators:
+        raise RuntimeError("The tessellation input contains no cells.")
 
     # Import inner cells
     with open(inner_cells_path, 'r') as file:
-        for line in file:
-            inner_cells.append(int(line.split()[0]) - 1)
+        for line_number, line in enumerate(file, start=1):
+            values = line.split()
+            if not values:
+                continue
+            try:
+                cell_index = int(values[0]) - 1
+            except ValueError as error:
+                raise RuntimeError(
+                    f"Invalid cell index in inner-cells row {line_number}."
+                ) from error
+            if not 0 <= cell_index < len(generators):
+                raise RuntimeError(
+                    f"Inner-cells row {line_number} references cell {cell_index + 1}, "
+                    f"but the tessellation has {len(generators)} cells."
+                )
+            inner_cells.append(cell_index)
 
     return generators, radii, inner_cells
 
@@ -77,9 +111,28 @@ def import_orientation(orientation_sample_path):
     """
     orientations = []
     with open(orientation_sample_path, 'r', encoding='utf-8') as file:
-        for line in file:
-            split_line = line.split(" ")
-            orientations.append([float(split_line[0]), float(split_line[1]), float(split_line[2])])
+        for line_number, line in enumerate(file, start=1):
+            values = line.split()
+            if not values:
+                continue
+            if len(values) < 3:
+                raise RuntimeError(
+                    f"Invalid orientation row {line_number}: expected at least 3 columns."
+                )
+            try:
+                orientation = [float(values[0]), float(values[1]), float(values[2])]
+            except ValueError as error:
+                raise RuntimeError(
+                    f"Invalid numeric value in orientation row {line_number}."
+                ) from error
+            if not all(math.isfinite(value) for value in orientation):
+                raise RuntimeError(
+                    f"Invalid orientation row {line_number}: values must be finite."
+                )
+            orientations.append(orientation)
+
+    if not orientations:
+        raise RuntimeError("The orientation input contains no rows.")
     return orientations
 
 
@@ -175,6 +228,10 @@ def generate_feret(tessellation_path, normals_path, num_of_cells):
 
     # Read the results
     a,b = read_feret_data('./data/feret')
+    if len(a) != num_of_cells:
+        raise RuntimeError(
+            f"Feret output contains {len(a)} rows, expected {num_of_cells}."
+        )
     vol = read_volume_function('./data/volume_function', num_of_cells)
 
     return a, b, vol
@@ -192,10 +249,26 @@ def read_feret_data(feret_path):
     """
     points_a, points_b = [], []
     with open(feret_path, 'r', encoding='utf-8') as file:
-        for line in file:
-            values = line.strip().split(" ")
-            points_a.append(float(values[0]))
-            points_b.append(float(values[1]))
+        for line_number, line in enumerate(file, start=1):
+            values = line.split()
+            if not values:
+                continue
+            if len(values) < 2:
+                raise RuntimeError(
+                    f"Invalid Feret row {line_number}: expected two columns."
+                )
+            try:
+                point_a, point_b = float(values[0]), float(values[1])
+            except ValueError as error:
+                raise RuntimeError(
+                    f"Invalid numeric value in Feret row {line_number}."
+                ) from error
+            if not math.isfinite(point_a) or not math.isfinite(point_b):
+                raise RuntimeError(
+                    f"Invalid Feret row {line_number}: values must be finite."
+                )
+            points_a.append(point_a)
+            points_b.append(point_b)
     return points_a, points_b
 
 
@@ -210,13 +283,34 @@ def read_volume_function(volf_path,  num_of_cells):
     Returns:
         np.ndarray: Volume function matrix.
     """
-    volume_matrix = np.zeros((num_of_cells, FERET_PARTITION_NUMBER))
+    rows = []
     with open(volf_path, 'r', encoding='utf-8') as file:
-        for i, line in enumerate(file):
-            values = line.strip().split(" ")
-            for j in range(FERET_PARTITION_NUMBER):
-                volume_matrix[i, j] = float(values[j])
-    return volume_matrix
+        for line_number, line in enumerate(file, start=1):
+            values = line.split()
+            if not values:
+                continue
+            if len(values) < FERET_PARTITION_NUMBER:
+                raise RuntimeError(
+                    f"Invalid volume-function row {line_number}: expected "
+                    f"at least {FERET_PARTITION_NUMBER} values, got {len(values)}."
+                )
+            try:
+                row = [float(value) for value in values[:FERET_PARTITION_NUMBER]]
+            except ValueError as error:
+                raise RuntimeError(
+                    f"Invalid numeric value in volume-function row {line_number}."
+                ) from error
+            if not all(math.isfinite(value) for value in row):
+                raise RuntimeError(
+                    f"Invalid volume-function row {line_number}: values must be finite."
+                )
+            rows.append(row)
+
+    if len(rows) != num_of_cells:
+        raise RuntimeError(
+            f"Volume-function output contains {len(rows)} rows, expected {num_of_cells}."
+        )
+    return np.asarray(rows, dtype=float)
 
 
 def twinning_threshold(cells, min_loc=0.4, max_loc=0.2):
@@ -237,9 +331,20 @@ def twinning_threshold(cells, min_loc=0.4, max_loc=0.2):
     def f(x):
         return 1 / ((6 * x / math.pi) ** (1 / 6))
 
+    if not cells:
+        raise RuntimeError("Cannot compute twinning thresholds without cells.")
+
+    volumes = [cell.volume for cell in cells]
+    if any(not math.isfinite(volume) or volume <= 0 for volume in volumes):
+        raise RuntimeError("Cell volumes must be finite positive numbers.")
+
     # Compute minimum and maximum volume in the tessellation
-    vmin = min(cell.volume for cell in cells)
-    vmax = max(cell.volume for cell in cells)
+    vmin = min(volumes)
+    vmax = max(volumes)
+    if vmin == vmax:
+        raise RuntimeError(
+            "Twinning thresholds require at least two distinct cell volumes."
+        )
 
     # Update twinning threshold for each cell
     for cell in cells:
@@ -264,10 +369,12 @@ def _resolve_parallel_workers(parallel_workers):
         return 1
 
     parallel_workers = int(parallel_workers)
+    if parallel_workers < 0:
+        raise ValueError("parallel_workers cannot be negative.")
     if parallel_workers == 0:
         return max(1, os.cpu_count() or 1)
 
-    return max(1, parallel_workers)
+    return parallel_workers
 
 
 def _seed_rng_for_cell(base_seed, cell_id):
@@ -433,7 +540,16 @@ def perform_twinning(
     # Update the twinning thresholds for all cells
     cells = twinning_threshold(cells)
 
-    max_feret = np.max(np.array([cell.volume_fraction for cell in cells]))
+    volume_fractions = np.array([cell.volume_fraction for cell in cells])
+    try:
+        fractions_are_finite = np.all(np.isfinite(volume_fractions))
+    except TypeError as error:
+        raise RuntimeError("Cell volume fractions must be finite numbers.") from error
+    if not fractions_are_finite:
+        raise RuntimeError("Cell volume fractions must be finite numbers.")
+    max_feret = np.max(volume_fractions)
+    if max_feret <= 0:
+        raise RuntimeError("At least one cell volume fraction must be positive.")
     progress_report_interval = max(1, int(progress_report_interval))
     worker_count = _resolve_parallel_workers(parallel_workers)
 
@@ -524,6 +640,11 @@ def deform_tessellation(macroscopic_strain, orientation_sample_path, max_lamella
     step_start = time.perf_counter()
     generators, radii, inner_cells = import_tessellation(tessellation_path,inner_cells_path)
     orientations = import_orientation(orientation_sample_path)
+    if len(orientations) != len(generators):
+        raise RuntimeError(
+            f"Orientation input contains {len(orientations)} rows, "
+            f"but the tessellation has {len(generators)} cells."
+        )
     logger.info("Step 1/6 finished: imported input files in %s.", tools.format_duration(time.perf_counter() - step_start))
 
     # Step 2: Compute twinning parameters
@@ -564,10 +685,6 @@ def deform_tessellation(macroscopic_strain, orientation_sample_path, max_lamella
         logger=logger,
     )
     logger.info("Step 5/6 finished in %s.", tools.format_duration(time.perf_counter() - step_start))
-    for cell in cells:
-        if cell.volume_fraction<0:
-            print(cell.volume_fraction)
-
     # Step 6: Prepare the cells for the Neper tool
     step_start = time.perf_counter()
     segments, small_cells = tools.prepare_for_neper(cells, logger)
@@ -609,6 +726,30 @@ def initialize_cells(generators, radii, a, b, volume_fractions, normals, propens
     Returns:
         list: Initialized list of `Cell` objects.
     """
+    expected_count = len(generators)
+    named_inputs = {
+        "radii": radii,
+        "Feret left endpoints": a,
+        "Feret right endpoints": b,
+        "volume fractions": volume_fractions,
+        "twinning normals": normals,
+        "twinning propensities": propensity,
+        "volume functions": volume_functions,
+        "orientations": orientations,
+        "lamella orientations": lamellae_orientations,
+        "twinning strains": twinning_strain,
+    }
+    mismatched = [
+        f"{name}={len(values)}"
+        for name, values in named_inputs.items()
+        if len(values) != expected_count
+    ]
+    if mismatched:
+        raise RuntimeError(
+            f"Cell input lengths do not match generators={expected_count}: "
+            + ", ".join(mismatched)
+        )
+
     cells = []
     for i in range(len(generators)):
         cell = classes.Cell(i + 1, generators[i], radii[i], a[i], b[i], volume_fractions[i], normals[i],

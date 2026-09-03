@@ -34,6 +34,23 @@ The project uses `uv` for dependency and virtual-environment management.
 uv sync --python 3.12
 ```
 
+## Development Checks
+
+Install the development tools and enable the local pre-commit hooks:
+
+```bash
+uv sync --group dev --python 3.12
+uv run pre-commit install
+```
+
+The hooks run critical Ruff checks and a small, fast sanity-test suite. They do not run the
+full structure generation or external Neper computations. Run the same checks manually with:
+
+```bash
+uv run --group dev pytest -q
+uv run pre-commit run --all-files
+```
+
 ## Current Usage
 
 The currently available workflow is run from the repository root:

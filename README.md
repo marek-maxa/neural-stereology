@@ -38,11 +38,16 @@ uv sync --python 3.12
 
 The currently available workflow is run from the repository root:
 
-Smoke-test bootstrap:
+Prepare these runtime inputs in `src/lamella/` or adjust the paths in `src/lamella/model/config.json`:
 
-```bash
-python scripts/generate_mock_inputs.py --cells 8
-```
+- `tessellation`
+- `inner_cells`
+- `orientation`
+- `model/NiTi_pm3m.cif`
+- `model/NiTiB19p.cif`
+
+The NiTi CIF files are part of the repository. The tessellation, inner-cell list, and orientation sample
+must be supplied for each run.
 
 Then run the generator:
 
@@ -101,4 +106,3 @@ Pass `--keep-temp` if you want to keep the auxiliary files for debugging or manu
 
 - the repository is at an early stage
 - only part of the intended full workflow is implemented so far
-- a mock mode is available for smoke testing without material-specific CIF inputs

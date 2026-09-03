@@ -20,8 +20,10 @@ License:
 
 
 import argparse
+import inspect
 import logging
 import os
+import sys
 from pathlib import Path
 import core.runner as runner
 import core.tools as tools
@@ -52,16 +54,13 @@ def validate_required_inputs(config):
     """
     Validate that the required runtime inputs are present before the simulation starts.
     """
-    use_mock_twinning = config.get("use_mock_twinning", False)
     required_paths = {
         "tessellation_path": config.get("tessellation_path"),
         "inner_cells_path": config.get("inner_cells_path"),
         "orientation_sample_path": config.get("orientation_sample_path"),
+        "model/NiTi_pm3m.cif": "./model/NiTi_pm3m.cif",
+        "model/NiTiB19p.cif": "./model/NiTiB19p.cif",
     }
-
-    if not use_mock_twinning:
-        required_paths["model/NiTi_pm3m.cif"] = "./model/NiTi_pm3m.cif"
-        required_paths["model/NiTiB19p.cif"] = "./model/NiTiB19p.cif"
 
     missing = []
     for label, raw_path in required_paths.items():
@@ -74,15 +73,11 @@ def validate_required_inputs(config):
 
     if missing:
         missing_list = "\n".join(f"- {path}" for path in missing)
-        mode_message = (
-            "Mock twinning mode is enabled, so CIF files are not required."
-            if use_mock_twinning
-            else "Real twinning mode is enabled, so NiTi CIF files are required."
-        )
         raise RuntimeError(
             "Missing required input files:\n"
             f"{missing_list}\n"
-            f"{mode_message}\n"
+            "Lamella simulation always requires tessellation, orientation, inner-cell, "
+            "and NiTi CIF inputs.\n"
             "Provide these files before running the structure-generation workflow."
         )
 
@@ -96,12 +91,21 @@ def run_simulation(config, strain, logger):
         config = dict(config)
         config.setdefault("strain", strain)
         config.pop("log_level", None)
+        allowed_keys = set(inspect.signature(runner.deform_tessellation).parameters)
+        removed_unknown_keys = sorted(key for key in config if key not in allowed_keys)
+        for key in removed_unknown_keys:
+            config.pop(key, None)
+        if removed_unknown_keys:
+            logger.warning(
+                "Ignoring unsupported config keys: %s",
+                ", ".join(removed_unknown_keys),
+            )
         validate_required_inputs(config)
         cells = runner.deform_tessellation(**config, logger=logger)
         logger.info("Simulation completed successfully.")
         return cells
     except Exception as e:
-        logger.error(f"Simulation failed: {e}")
+        logger.error("Simulation failed: %s", e)
         raise
 
 
@@ -185,10 +189,13 @@ if __name__ == "__main__":
         "--assess", action="store_true", help="Assess the results after simulation."
     )
     args = parser.parse_args()
-    main(
-        config_path=args.config,
-        assess_results_flag=args.assess,
-        workers=args.workers,
-        progress_interval=args.progress_interval,
-        log_level=args.log_level,
-    )
+    try:
+        main(
+            config_path=args.config,
+            assess_results_flag=args.assess,
+            workers=args.workers,
+            progress_interval=args.progress_interval,
+            log_level=args.log_level,
+        )
+    except Exception:
+        sys.exit(1)

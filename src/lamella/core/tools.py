@@ -27,7 +27,9 @@ import logging
 import json
 import shutil
 import math
+import signal
 import time
+import copy
 from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
@@ -96,6 +98,140 @@ def format_duration(seconds):
     return f"{int(hours)}h {int(rem_minutes):02d}m {math.floor(rem_seconds):02d}s"
 
 
+def _clean_subprocess_output(text):
+    """
+    Normalize subprocess output for concise logging.
+    """
+    cleaned = (text or "").replace("\b", "")
+    lines = []
+    for raw_line in cleaned.splitlines():
+        line = " ".join(raw_line.split()).strip()
+        if line:
+            lines.append(line)
+    return lines
+
+
+def summarize_subprocess_failure(error, tool_name):
+    """
+    Build a compact failure summary for external tool crashes.
+    """
+    if error.returncode < 0:
+        signal_number = -error.returncode
+        try:
+            signal_name = signal.Signals(signal_number).name
+            status = f"signal {signal_number} ({signal_name})"
+        except ValueError:
+            status = f"signal {signal_number}"
+    else:
+        status = f"exit code {error.returncode}"
+
+    stderr_lines = _clean_subprocess_output(getattr(error, "stderr", ""))
+    stdout_lines = _clean_subprocess_output(getattr(error, "stdout", ""))
+    combined_lines = stderr_lines or stdout_lines
+
+    hint = None
+    preferred_markers = ("error", "failed", "flattening", "running", "loading", "parsing")
+    for line in reversed(combined_lines):
+        lowered = line.lower()
+        if any(marker in lowered for marker in preferred_markers):
+            hint = line
+            break
+
+    if hint is None and combined_lines:
+        hint = combined_lines[-1]
+
+    summary = f"{tool_name} failed ({status})"
+    if hint:
+        summary += f". Last output: {hint}"
+
+    return summary, combined_lines[-10:]
+
+
+def _load_multiscale_cell_specs(data_dir):
+    """
+    Load lamellar segment widths together with their per-cell orientation files.
+    """
+    specs = []
+    lam_wid_path = os.path.join(data_dir, "lam_wid")
+    with open(lam_wid_path, "r", encoding="utf-8") as file_handle:
+        for line_number, raw_line in enumerate(file_handle, start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            parts = line.split(maxsplit=1)
+            mid = parts[0]
+            widths = [float(value) for value in parts[1].split(":")] if len(parts) > 1 else []
+
+            cell_path = os.path.join(data_dir, f"cell{line_number}")
+            with open(cell_path, "r", encoding="utf-8") as cell_handle:
+                orientations = [row.strip() for row in cell_handle if row.strip()]
+
+            if len(widths) != len(orientations):
+                raise RuntimeError(
+                    f"Inconsistent lamellar Neper inputs for cell {line_number}: "
+                    f"{len(widths)} widths but {len(orientations)} orientations."
+                )
+
+            specs.append(
+                {
+                    "mid": mid,
+                    "widths": widths,
+                    "orientations": orientations,
+                }
+            )
+
+    return specs
+
+
+def _write_multiscale_cell_specs(data_dir, specs):
+    """
+    Persist multiscale cell specifications back to lam_wid and cell* files.
+    """
+    lam_wid_path = os.path.join(data_dir, "lam_wid")
+    with open(lam_wid_path, "w", encoding="utf-8") as file_handle:
+        for index, spec in enumerate(specs, start=1):
+            file_handle.write(
+                f"{spec['mid']} " + ":".join(str(width) for width in spec["widths"]) + "\n"
+            )
+
+            cell_path = os.path.join(data_dir, f"cell{index}")
+            with open(cell_path, "w", encoding="utf-8") as cell_handle:
+                for orientation in spec["orientations"]:
+                    cell_handle.write(f"{orientation}\n")
+
+
+def _collapse_to_dominant_segment(spec):
+    """
+    Replace a multi-segment cell by its widest segment to stabilize Neper flattening.
+    """
+    if len(spec["widths"]) <= 1:
+        return False
+
+    dominant_index = max(range(len(spec["widths"])), key=spec["widths"].__getitem__)
+    spec["widths"] = [spec["widths"][dominant_index]]
+    spec["orientations"] = [spec["orientations"][dominant_index]]
+    return True
+
+
+def _should_retry_with_simplified_cells(error, tail_lines):
+    """
+    Retry only for Neper crashes that happen during 2-scale flattening.
+    """
+    if error.returncode >= 0:
+        return False
+
+    joined_output = " ".join(tail_lines).lower()
+    return "flattening 2-scale tessellation" in joined_output
+
+
+def _run_neper_second_tessellation(command):
+    """
+    Execute the second Neper tessellation command.
+    """
+    subprocess.run(command, capture_output=True, text=True, check=True)
+
+
 def generate_twin_parameters(epsilon, orientation_sample, strain, logger=None):
     """
     Generates twinning parameters and returns them in a DataFrame.
@@ -140,82 +276,6 @@ def generate_twin_parameters(epsilon, orientation_sample, strain, logger=None):
 
     logger.info("Twinning parameters generated successfully.")
     return pd.DataFrame(data)
-
-
-def generate_mock_twin_parameters(
-    epsilon,
-    orientation_sample,
-    strain,
-    mock_active_fraction=0.25,
-    mock_volume_fraction_base=0.05,
-    mock_volume_fraction_jitter=0.01,
-    logger=None,
-):
-    """
-    Generate synthetic twinning parameters for smoke testing the geometry pipeline
-    without crystallographic CIF inputs.
-    """
-    logger = logger or logging.getLogger("Twinning")
-    rng = np.random.default_rng(42)
-
-    logger.warning(
-        "Using mock twinning mode. The generated lamellae are suitable for testing the "
-        "pipeline, not for scientific interpretation."
-    )
-
-    active_count = max(1, round(len(orientation_sample) * mock_active_fraction))
-    active_ids = set(np.linspace(0, len(orientation_sample) - 1, active_count, dtype=int).tolist())
-
-    rows = []
-    for gi, eu in enumerate(orientation_sample):
-        normal = rng.normal(size=3)
-        normal /= np.linalg.norm(normal)
-
-        lamella_orientation = [
-            float((eu[0] + rng.uniform(-0.15, 0.15)) % (2 * np.pi)),
-            float(np.clip(eu[1] + rng.uniform(-0.1, 0.1), 0, np.pi)),
-            float((eu[2] + rng.uniform(-0.15, 0.15)) % (2 * np.pi)),
-        ]
-
-        volume_fraction = float(
-            np.clip(
-                mock_volume_fraction_base + mock_volume_fraction_jitter * np.sin(gi),
-                0.02,
-                0.35,
-            )
-        )
-        propensity = 0.8 if gi in active_ids else 0.05
-
-        twinning_strain = np.array([
-            [epsilon, 0.0, 0.0],
-            [0.0, -epsilon / 2, 0.0],
-            [0.0, 0.0, -epsilon / 2],
-        ])
-
-        rows.append(
-            {
-                "grain_id": gi,
-                "n_x": float(normal[0]),
-                "n_y": float(normal[1]),
-                "n_z": float(normal[2]),
-                "Schmid factor": propensity,
-                "Twin volume fraction": volume_fraction,
-                "phi1_g": eu[0],
-                "PHI_g": eu[1],
-                "phi2_g": eu[2],
-                "phi1_l": lamella_orientation[0],
-                "PHI_l": lamella_orientation[1],
-                "phi2_l": lamella_orientation[2],
-                "twinning_strain_xx": float(twinning_strain[0, 0]),
-                "twinning_strain_yy": float(twinning_strain[1, 1]),
-                "twinning_strain_zz": float(twinning_strain[2, 2]),
-                "twinning_strain_xy": 0.0,
-                "twinning_strain_yz": 0.0,
-                "twinning_strain_zx": 0.0,
-            }
-        )
-
-    return pd.DataFrame(rows)
 
 
 def initialize_lattice_parameters():
@@ -442,10 +502,15 @@ def create_first_tessellation(small_generators, logger=None):
     try:
         subprocess.run(command1, capture_output=True, text=True, check=True)
         shutil.move('small.tess', './data/small.tess')
-        logger.info("Successfully created the .tess file for the original tessellation.")
+        if logger:
+            logger.info("Successfully created the .tess file for the original tessellation.")
     except subprocess.CalledProcessError as e:
-        logger.info("Error in creating .tess file for the original tessellation:")
-        #print(e.stderr)
+        summary, tail_lines = summarize_subprocess_failure(e, "Neper original tessellation creation")
+        if logger:
+            logger.error("%s", summary)
+            if logger.isEnabledFor(logging.DEBUG) and tail_lines:
+                logger.debug("Neper original tessellation output tail:\n%s", "\n".join(tail_lines))
+        raise RuntimeError(summary) from e
 
 
 def recompute_lamellae(small_cells, new_a, new_b):
@@ -459,11 +524,18 @@ def recompute_lamellae(small_cells, new_a, new_b):
 
 def write_additional_files_for_neper(small_cells, small_segments):
     """Write additional files for Neper, including 'cell' and 'lam_wid'."""
+    filtered_segments_per_cell = []
+
+    for segments in small_segments:
+        filtered_segments = [seg for seg in segments if seg[0] >= 0.001]
+        if not filtered_segments:
+            filtered_segments = [max(segments, key=lambda seg: seg[0])]
+        filtered_segments_per_cell.append(filtered_segments)
+
     for i, cell in enumerate(small_cells):
         file_name = f"./data/cell{i + 1}"
         with open(file_name, "w", encoding='utf-8') as file:
-            segments = small_segments[i]
-            for seg in segments:
+            for seg in filtered_segments_per_cell[i]:
                 if seg[1] == "gap":
                     file.write(f"{cell.orientation[0] } {cell.orientation[1] } {cell.orientation[2] }\n")
                 else:
@@ -473,18 +545,8 @@ def write_additional_files_for_neper(small_cells, small_segments):
     with open("./data/lam_wid", "w", encoding='utf-8') as file_wid:
         for i, cell in enumerate(small_cells):
             file_wid.write(f"{i + 1} ")
-            segments = small_segments[i]
-            if len(segments) == 1:
-                seg = segments[0]
-                file_wid.write(f"{seg[0]}:0")
-            else:
-                for j, seg in enumerate(segments):
-                    # Skip very small widths
-                    if seg[0] >= 0.001:
-                        if j == len(segments) - 1:
-                            file_wid.write(f"{seg[0]}")
-                        else:
-                            file_wid.write(f"{seg[0]}:")
+            widths = [seg[0] for seg in filtered_segments_per_cell[i]]
+            file_wid.write(":".join(str(width) for width in widths))
 
             file_wid.write("\n")
 
@@ -514,16 +576,69 @@ def create_second_tessellation(small_cells, logger=None):
         "-ori", f"random::file({os.path.join(data_dir, 'ori2')},des=euler-bunge:passive)",
         "-oridescriptor", "euler-bunge:passive", "-o", "2scale"
     ]
-    #print(command2)
-    try:
-        subprocess.run(command2, capture_output=True, text=True, check=True)
-        logger.info("Successfully created the .tess file for the tessellation with lamellae.")
-    except subprocess.CalledProcessError as e:
-        logger.info("Error in creating .tess file for the tessellation with lamellae:")
-        #print(e.stderr)
-        #print(e.stdout)
 
-    os.chdir(original_directory)
+    try:
+        _run_neper_second_tessellation(command2)
+        if logger:
+            logger.info("Successfully created the .tess file for the tessellation with lamellae.")
+    except subprocess.CalledProcessError as e:
+        summary, tail_lines = summarize_subprocess_failure(e, "Neper lamellar tessellation creation")
+        if _should_retry_with_simplified_cells(e, tail_lines):
+            original_specs = _load_multiscale_cell_specs(data_dir)
+            working_specs = copy.deepcopy(original_specs)
+            candidate_indices = sorted(
+                (index for index, spec in enumerate(working_specs) if len(spec["widths"]) > 1),
+                key=lambda index: (-len(working_specs[index]["widths"]), index),
+            )
+            simplified_mids = []
+
+            if logger:
+                logger.warning(
+                    "Neper flattening crashed; retrying with simplified lamellar cells."
+                )
+
+            for candidate_index in candidate_indices:
+                if not _collapse_to_dominant_segment(working_specs[candidate_index]):
+                    continue
+
+                simplified_mids.append(working_specs[candidate_index]["mid"])
+                _write_multiscale_cell_specs(data_dir, working_specs)
+
+                try:
+                    _run_neper_second_tessellation(command2)
+                    if logger:
+                        logger.warning(
+                            "Successfully created the .tess file for the tessellation with lamellae "
+                            "after simplifying %s cell(s): %s.",
+                            len(simplified_mids),
+                            ", ".join(simplified_mids[:10]) + ("..." if len(simplified_mids) > 10 else ""),
+                        )
+                    return
+                except subprocess.CalledProcessError as retry_error:
+                    retry_summary, retry_tail_lines = summarize_subprocess_failure(
+                        retry_error, "Neper lamellar tessellation creation"
+                    )
+                    if logger and logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "Neper retry after simplifying cell %s still failed: %s",
+                            working_specs[candidate_index]["mid"],
+                            retry_summary,
+                        )
+                        if retry_tail_lines:
+                            logger.debug(
+                                "Neper lamellar tessellation retry output tail:\n%s",
+                                "\n".join(retry_tail_lines),
+                            )
+
+            _write_multiscale_cell_specs(data_dir, original_specs)
+
+        if logger:
+            logger.error("%s", summary)
+            if logger.isEnabledFor(logging.DEBUG) and tail_lines:
+                logger.debug("Neper lamellar tessellation output tail:\n%s", "\n".join(tail_lines))
+        raise RuntimeError(summary) from e
+    finally:
+        os.chdir(original_directory)
 
 
 def segment_lengths_in_subinterval(lamellae, a, b, c, d):
@@ -605,9 +720,12 @@ def check_precision(cells, segments, logger=None):
         if logger:
             logger.info("Neper volume analysis completed successfully.")
     except subprocess.CalledProcessError as e:
+        summary, tail_lines = summarize_subprocess_failure(e, "Neper volume analysis")
         if logger:
-            logger.error(f"Error in running Neper: {e.stderr}")
-        raise RuntimeError(f"Error in running Neper: {e.stderr}")
+            logger.error("%s", summary)
+            if logger.isEnabledFor(logging.DEBUG) and tail_lines:
+                logger.debug("Neper volume analysis output tail:\n%s", "\n".join(tail_lines))
+        raise RuntimeError(summary) from e
     except Exception as e:
         if logger:
             logger.error(f"Error during Neper command execution: {e}")

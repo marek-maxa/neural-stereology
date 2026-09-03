@@ -84,8 +84,6 @@ def import_orientation(orientation_sample_path):
 
 
 def compute_twinning_parameters(macroscopic_strain, orientation_sample, strain, data_directory='./data',
-                                use_mock_twinning=False, mock_active_fraction=0.25,
-                                mock_volume_fraction_base=0.05, mock_volume_fraction_jitter=0.01,
                                 logger=None):
     """
     Computes twinning parameters (normals, volume fractions, Schmid factors) based on
@@ -103,19 +101,8 @@ def compute_twinning_parameters(macroscopic_strain, orientation_sample, strain, 
     # Ensure the data directory exists
     os.makedirs(data_directory, exist_ok=True)
 
-    # Generate twinning parameters using provided data
-    if use_mock_twinning:
-        df = tools.generate_mock_twin_parameters(
-            macroscopic_strain,
-            orientation_sample,
-            strain,
-            mock_active_fraction=mock_active_fraction,
-            mock_volume_fraction_base=mock_volume_fraction_base,
-            mock_volume_fraction_jitter=mock_volume_fraction_jitter,
-            logger=logger,
-        )
-    else:
-        df = tools.generate_twin_parameters(macroscopic_strain, orientation_sample, strain, logger)
+    # Generate twinning parameters using the NiTi material model inputs.
+    df = tools.generate_twin_parameters(macroscopic_strain, orientation_sample, strain, logger)
 
     # Save the generated data to text files
     save_twinning_data(df, data_directory)
@@ -181,9 +168,10 @@ def generate_feret(tessellation_path, normals_path, num_of_cells):
     """
     executable_path = './cpp/Feret'
     try:
-        subprocess.run([executable_path, tessellation_path, normals_path], capture_output=True, check=True)
+        subprocess.run([executable_path, tessellation_path, normals_path], capture_output=True, text=True, check=True)
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Error running Feret C++ code: {e.stderr}") from e
+        summary, _ = tools.summarize_subprocess_failure(e, "Feret projection generation")
+        raise RuntimeError(summary) from e
 
     # Read the results
     a,b = read_feret_data('./data/feret')
@@ -512,8 +500,6 @@ def deform_tessellation(macroscopic_strain, orientation_sample_path, max_lamella
                         min_distance_among_lamellae, min_lamella_width, max_lamella_width, growth_rates,
                         tessellation_path, inner_cells_path, strain, use_simul_annealing,
                         parallel_workers=0, progress_report_interval=10, random_seed=None,
-                        use_mock_twinning=False, mock_active_fraction=0.25,
-                        mock_volume_fraction_base=0.05, mock_volume_fraction_jitter=0.01,
                         logger=None):
     """
     Main function to deform the tessellation by growing lamellae based on given parameters.
@@ -545,10 +531,6 @@ def deform_tessellation(macroscopic_strain, orientation_sample_path, max_lamella
     lamellae_orientations, volume_fractions, normals, propensity, strain = compute_twinning_parameters(macroscopic_strain,
                                                                                                orientations, strain,
                                                                                                "./data",
-                                                                                               use_mock_twinning,
-                                                                                               mock_active_fraction,
-                                                                                               mock_volume_fraction_base,
-                                                                                               mock_volume_fraction_jitter,
                                                                                                logger)
     #print(f'volfrac:{np.where(np.array(volume_fractions)<0.)}')
     #print(f'volfrac:{volume_fractions}')

@@ -1,5 +1,5 @@
 {
-    "macroscopic_strain": 0.05,
+    "macroscopic_strain": 0.2,
     "orientation_sample_path": "./orientation",
     "max_lamellae_per_cell": 3,
     "min_distance_from_endpoints": 0.05,
@@ -18,9 +18,5 @@
     "parallel_workers": 0,
     "progress_report_interval": 50,
     "random_seed": 42,
-    "log_level": "INFO",
-    "use_mock_twinning": false,
-    "mock_active_fraction": 0.5,
-    "mock_volume_fraction_base": 0.14,
-    "mock_volume_fraction_jitter": 0.03
+    "log_level": "INFO"
 }

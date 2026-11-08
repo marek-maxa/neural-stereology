@@ -119,6 +119,46 @@ python scripts/visualize_tess.py \
 The propensity render uses a blue-white-red color map by default and removes temporary helper files after the image is created.
 Pass `--keep-temp` if you want to keep the auxiliary files for debugging or manual post-processing.
 
+## Virtual 2D Sections
+
+The sectioning module (`src/sections/`) creates an axis-aligned cut at a relative position
+inside the 3D tessellation and rasterizes it at a configurable resolution:
+
+```bash
+python scripts/generate_sections.py \
+  --tess src/lamella/data/2scale.tess \
+  --axis z \
+  --position 0.5 \
+  --resolution 256
+```
+
+Sections are computed by an internal exact algorithm: every cell face contributes the chords
+where the plane crosses its boundary, and the chords are chained through shared cell edges into
+closed polygons. The method does not assume convex cells or planar faces, which matters because
+Neper's regularization and the lamellar subdivision produce slightly non-convex cells. Each section
+is validated to tile the domain exactly (polygon area and full pixel coverage); a plane that would
+pass through a vertex is shifted by a negligible amount and the shift is recorded in the metadata.
+
+Each section writes:
+
+- a square PNG with deterministic debug colors
+- a compressed NPZ containing subcell IDs, parent-cell IDs, and orientation values per pixel
+- JSON metadata and vector polygons describing the exact plane
+
+The PNG colors identify cells only. They are explicitly **not** physical EBSD/IPF colors;
+the physical rendering will be added once the experimental map type, crystal symmetry, reference
+direction, and color key are confirmed.
+
+The module can also be used programmatically to cut one loaded tessellation many times:
+
+```python
+from sections import read_tessellation, compute_section
+
+tessellation = read_tessellation("src/lamella/data/2scale.tess")
+section = compute_section(tessellation, axis="x", position=0.37, resolution=256)
+section.cell_ids, section.parent_cell_ids, section.orientations  # numpy arrays
+```
+
 ## Notes
 
 - the repository is at an early stage

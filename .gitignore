@@ -34,6 +34,7 @@ src/lamella/tessellation
 src/lamella/inner_cells
 src/lamella/orientation
 src/lamella/visualization/
+outputs/
 
 # Generated mesh / solver artifacts
 *.geo
@@ -43,3 +44,7 @@ src/lamella/visualization/
 *.pckl
 img*.pov
 img*.png
+
+# Documents & Papers
+docs/
+CLAUDE.local.md

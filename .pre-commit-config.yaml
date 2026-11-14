@@ -12,3 +12,8 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: nbstripout
+        name: strip notebook outputs
+        entry: uv run --frozen --group dev nbstripout
+        language: system
+        types: [jupyter]

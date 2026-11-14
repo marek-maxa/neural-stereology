@@ -24,6 +24,8 @@ The currently implemented part of the repository is the 3D structure-generation 
 - `src/lamella/` — synthetic 3D structure generation (inherited generator, run as a script)
 - `src/neural_stereology/` — installable package with the new pipeline stages (currently `sections`)
 - `scripts/` — thin command-line entry points
+- `configs/` — versioned JSON run configurations
+- `notebooks/` — exploratory JupyterLab notebooks (outputs stripped on commit)
 - `tests/` — fast sanity and unit tests
 - `pyproject.toml` — Python environment and dependency definition
 - `README.md` — project overview

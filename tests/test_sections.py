@@ -5,13 +5,13 @@ import matplotlib.image as mpimg
 import numpy as np
 import pytest
 
-from sections.generator import (
+from neural_stereology.sections.generator import (
     SectionGeometryError,
     _polygon_area,
     compute_section,
     generate_section,
 )
-from sections.tessellation import (
+from neural_stereology.sections.tessellation import (
     Plane,
     avoid_vertices,
     intersect_polyhedra,

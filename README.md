@@ -21,8 +21,10 @@ The currently implemented part of the repository is the 3D structure-generation 
 
 ## Repository Structure
 
-- `src/lamella/` — current module for synthetic 3D structure generation
-- `scripts/` — helper scripts for bootstrap and development workflows
+- `src/lamella/` — synthetic 3D structure generation (inherited generator, run as a script)
+- `src/neural_stereology/` — installable package with the new pipeline stages (currently `sections`)
+- `scripts/` — thin command-line entry points
+- `tests/` — fast sanity and unit tests
 - `pyproject.toml` — Python environment and dependency definition
 - `README.md` — project overview
 
@@ -121,11 +123,11 @@ Pass `--keep-temp` if you want to keep the auxiliary files for debugging or manu
 
 ## Virtual 2D Sections
 
-The sectioning module (`src/sections/`) creates an axis-aligned cut at a relative position
+The sectioning module (`src/neural_stereology/sections/`) creates an axis-aligned cut at a relative position
 inside the 3D tessellation and rasterizes it at a configurable resolution:
 
 ```bash
-python scripts/generate_sections.py \
+uv run python scripts/generate_sections.py \
   --tess src/lamella/data/2scale.tess \
   --axis z \
   --position 0.5 \
@@ -152,7 +154,7 @@ direction, and color key are confirmed.
 The module can also be used programmatically to cut one loaded tessellation many times:
 
 ```python
-from sections import read_tessellation, compute_section
+from neural_stereology.sections import read_tessellation, compute_section
 
 tessellation = read_tessellation("src/lamella/data/2scale.tess")
 section = compute_section(tessellation, axis="x", position=0.37, resolution=256)
